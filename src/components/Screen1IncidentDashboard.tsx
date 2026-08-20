@@ -287,7 +287,7 @@ export const Screen1IncidentDashboard: React.FC<Screen1Props> = ({
             <div className="flex items-center gap-1.5 min-w-0">
               <Map className="w-3.5 h-3.5 text-blue-600 shrink-0" />
               <h3 className="text-[11px] font-bold text-slate-900 uppercase tracking-tight truncate">
-                LAYOUT DIAGRAM – SALBIAH FIELD
+                LAYOUT DIAGRAM – {incident.field || 'OFFSHORE FIELD'}
               </h3>
             </div>
             {/* View Mode Toggle */}

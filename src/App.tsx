@@ -3,6 +3,7 @@ import { Header } from './components/Header';
 import { Screen1IncidentDashboard } from './components/Screen1IncidentDashboard';
 import { Screen2OperationalCoordination } from './components/Screen2OperationalCoordination';
 import { Screen3TeamsMeeting } from './components/Screen3TeamsMeeting';
+import { EditPortalModal, EditPortalData } from './components/EditPortalModal';
 import {
   initialIncident,
   initialTimeline,
@@ -27,19 +28,55 @@ import {
   User
 } from './types';
 
+// Storage helpers
+const getSavedState = <T,>(key: string, fallback: T): T => {
+  try {
+    const saved = localStorage.getItem(`drsb_emt_${key}`);
+    if (saved) return JSON.parse(saved);
+  } catch (e) {
+    console.error(`Failed to load ${key} from storage`, e);
+  }
+  return fallback;
+};
+
+const saveState = <T,>(key: string, data: T) => {
+  try {
+    localStorage.setItem(`drsb_emt_${key}`, JSON.stringify(data));
+  } catch (e) {
+    console.error(`Failed to save ${key} to storage`, e);
+  }
+};
+
 export default function App() {
-  // --- Global Application State ---
-  const [incident] = useState<IncidentDetails>(initialIncident);
-  const [timeline] = useState<TimelineEvent[]>(initialTimeline);
-  const [actions, setActions] = useState<ActionItem[]>(initialActionItems);
-  const [vessels, setVessels] = useState<Vessel[]>(initialVessels);
-  const [helicopter] = useState<Helicopter>(initialHelicopter);
-  const [weather, setWeather] = useState<WeatherData>(initialWeather);
-  const [participants] = useState<Participant[]>(initialParticipants);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(initialChatMessages);
+  // --- Global Application State with Local Persistence ---
+  const [incident, setIncident] = useState<IncidentDetails>(() =>
+    getSavedState<IncidentDetails>('incident', initialIncident)
+  );
+  const [timeline, setTimeline] = useState<TimelineEvent[]>(() =>
+    getSavedState<TimelineEvent[]>('timeline', initialTimeline)
+  );
+  const [actions, setActions] = useState<ActionItem[]>(() =>
+    getSavedState<ActionItem[]>('actions', initialActionItems)
+  );
+  const [vessels, setVessels] = useState<Vessel[]>(() =>
+    getSavedState<Vessel[]>('vessels', initialVessels)
+  );
+  const [helicopter, setHelicopter] = useState<Helicopter>(() =>
+    getSavedState<Helicopter>('helicopter', initialHelicopter)
+  );
+  const [weather, setWeather] = useState<WeatherData>(() =>
+    getSavedState<WeatherData>('weather', initialWeather)
+  );
+  const [participants, setParticipants] = useState<Participant[]>(() =>
+    getSavedState<Participant[]>('participants', initialParticipants)
+  );
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() =>
+    getSavedState<ChatMessage[]>('chatMessages', initialChatMessages)
+  );
   const [currentUser] = useState<User>(initialUsers[0]);
 
-  // --- Layout State ---
+  // --- Modal & Layout State ---
+  const [isEditPortalOpen, setIsEditPortalOpen] = useState<boolean>(false);
   const [expandedScreen, setExpandedScreen] = useState<number | null>(null);
 
   // --- Real-Time Telemetry Loop ---
@@ -92,7 +129,11 @@ export default function App() {
 
   // --- Handlers ---
   const handleUpdateActionStatus = (id: number, status: 'Completed' | 'In Progress' | 'Pending') => {
-    setActions((prev) => prev.map((a) => (a.id === id ? { ...a, status } : a)));
+    setActions((prev) => {
+      const updated = prev.map((a) => (a.id === id ? { ...a, status } : a));
+      saveState('actions', updated);
+      return updated;
+    });
   };
 
   const handleSendChatMessage = (text: string) => {
@@ -103,7 +144,52 @@ export default function App() {
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       text
     };
-    setChatMessages((prev) => [...prev, newMsg]);
+    setChatMessages((prev) => {
+      const updated = [...prev, newMsg];
+      saveState('chatMessages', updated);
+      return updated;
+    });
+  };
+
+  const handleSavePortalData = (updated: EditPortalData) => {
+    setIncident(updated.incident);
+    setTimeline(updated.timeline);
+    setActions(updated.actions);
+    setVessels(updated.vessels);
+    setHelicopter(updated.helicopter);
+    setWeather(updated.weather);
+    setParticipants(updated.participants);
+    setChatMessages(updated.chatMessages);
+
+    // Save to storage
+    saveState('incident', updated.incident);
+    saveState('timeline', updated.timeline);
+    saveState('actions', updated.actions);
+    saveState('vessels', updated.vessels);
+    saveState('helicopter', updated.helicopter);
+    saveState('weather', updated.weather);
+    saveState('participants', updated.participants);
+    saveState('chatMessages', updated.chatMessages);
+  };
+
+  const handleResetToDefaults = () => {
+    setIncident(initialIncident);
+    setTimeline(initialTimeline);
+    setActions(initialActionItems);
+    setVessels(initialVessels);
+    setHelicopter(initialHelicopter);
+    setWeather(initialWeather);
+    setParticipants(initialParticipants);
+    setChatMessages(initialChatMessages);
+
+    localStorage.removeItem('drsb_emt_incident');
+    localStorage.removeItem('drsb_emt_timeline');
+    localStorage.removeItem('drsb_emt_actions');
+    localStorage.removeItem('drsb_emt_vessels');
+    localStorage.removeItem('drsb_emt_helicopter');
+    localStorage.removeItem('drsb_emt_weather');
+    localStorage.removeItem('drsb_emt_participants');
+    localStorage.removeItem('drsb_emt_chatMessages');
   };
 
   const handleToggleGlobalFullscreen = () => {
@@ -120,7 +206,9 @@ export default function App() {
     <div className="min-h-screen bg-[#f5f5f7] text-slate-900 flex flex-col font-sans selection:bg-blue-500 selection:text-white">
       {/* Top Header Navigation */}
       <Header
+        incident={incident}
         onToggleGlobalFullscreen={handleToggleGlobalFullscreen}
+        onOpenEditPortal={() => setIsEditPortalOpen(true)}
       />
 
       {/* Main Dashboard Grid Area */}
@@ -133,7 +221,7 @@ export default function App() {
               incident={incident}
               timeline={timeline}
               weather={weather}
-              vessel={vessels[0]}
+              vessel={vessels[0] || initialVessels[0]}
               isExpanded={expandedScreen === 1}
               onToggleExpand={() => setExpandedScreen(expandedScreen === 1 ? null : 1)}
             />
@@ -142,7 +230,7 @@ export default function App() {
           {/* SCREEN 2: OPERATIONAL COORDINATION */}
           <div className={expandedScreen === 2 ? 'col-span-1 lg:col-span-3' : 'col-span-1'}>
             <Screen2OperationalCoordination
-              vessel={vessels[0]}
+              vessel={vessels[0] || initialVessels[0]}
               helicopter={helicopter}
               actions={actions}
               weather={weather}
@@ -158,7 +246,7 @@ export default function App() {
               participants={participants}
               chatMessages={chatMessages}
               weather={weather}
-              vessel={vessels[0]}
+              vessel={vessels[0] || initialVessels[0]}
               isExpanded={expandedScreen === 3}
               onToggleExpand={() => setExpandedScreen(expandedScreen === 3 ? null : 3)}
               onSendChatMessage={handleSendChatMessage}
@@ -166,6 +254,24 @@ export default function App() {
           </div>
         </div>
       </main>
+
+      {/* Full-Featured Data & Information Edit Portal */}
+      <EditPortalModal
+        isOpen={isEditPortalOpen}
+        onClose={() => setIsEditPortalOpen(false)}
+        data={{
+          incident,
+          timeline,
+          actions,
+          vessels,
+          helicopter,
+          weather,
+          participants,
+          chatMessages
+        }}
+        onSave={handleSavePortalData}
+        onResetToDefaults={handleResetToDefaults}
+      />
     </div>
   );
 }
