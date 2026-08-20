@@ -1,0 +1,55 @@
+{
+  "entities": {
+    "IncidentDetails": {
+      "title": "Incident Details",
+      "description": "Comprehensive offshore emergency status, personnel muster audit, and incident objectives",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 64 },
+        "title": { "type": "string", "maxLength": 256 },
+        "clusterName": { "type": "string", "maxLength": 256 },
+        "companyName": { "type": "string", "maxLength": 256 },
+        "level": { "type": "string", "enum": ["LEVEL 1 (LOCAL)", "LEVEL 2 (STABILISING)", "LEVEL 3 (CRISIS)"] },
+        "location": { "type": "string", "maxLength": 128 },
+        "field": { "type": "string", "maxLength": 128 },
+        "accountedPersonnel": { "type": "number" },
+        "totalPersonnel": { "type": "number" },
+        "missingPersons": { "type": "number" },
+        "receivingMedical": { "type": "number" },
+        "evacuated": { "type": "number" },
+        "medicalTransferStatus": { "type": "string", "maxLength": 128 },
+        "currentPriorities": { "type": "array" },
+        "incidentObjectives": { "type": "array" },
+        "latestSitrepNumber": { "type": "string", "maxLength": 32 },
+        "latestSitrepText": { "type": "array" },
+        "nextSitrepTime": { "type": "string", "maxLength": 32 },
+        "statusText": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["id", "title", "level", "location", "field", "accountedPersonnel", "totalPersonnel"]
+    },
+    "EMTDashboardState": {
+      "title": "EMT Dashboard Live State",
+      "description": "Consolidated live synchronization state for DRSB EMT Emergency Dashboard",
+      "type": "object",
+      "properties": {
+        "incident": { "type": "object" },
+        "timeline": { "type": "array" },
+        "actions": { "type": "array" },
+        "vessels": { "type": "array" },
+        "helicopter": { "type": "object" },
+        "weather": { "type": "object" },
+        "participants": { "type": "array" },
+        "chatMessages": { "type": "array" },
+        "lastUpdated": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      },
+      "required": ["incident", "timeline", "actions", "vessels", "helicopter", "weather", "participants", "chatMessages"]
+    }
+  },
+  "firestore": {
+    "/emt_dashboard/{docId}": {
+      "schema": "EMTDashboardState",
+      "description": "Real-time live synchronization document for EMT Emergency Dashboard"
+    }
+  }
+}

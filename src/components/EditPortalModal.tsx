@@ -383,7 +383,7 @@ export const EditPortalModal: React.FC<EditPortalModalProps> = ({
                 )}
               </div>
               <p className="text-[11px] text-slate-400">
-                Modify, add, or delete any values, titles, or logs. Changes reflect across all screens immediately upon saving.
+                Modify, add, or delete any values, titles, or logs. Changes are committed to Firebase Firestore and reflect across all screens immediately.
               </p>
             </div>
           </div>
@@ -1607,7 +1607,7 @@ export const EditPortalModal: React.FC<EditPortalModalProps> = ({
               </span>
             ) : (
               <span className="text-slate-500 flex items-center gap-1">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> All data is synchronized with the live dashboard.
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> All data is synchronized with Firebase Firestore & the live dashboard.
               </span>
             )}
           </div>

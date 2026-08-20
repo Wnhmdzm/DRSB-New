@@ -1,6 +1,6 @@
 {
   "name": "DRSB Emergency Management Team Dashboard",
-  "description": "Real-time analytics & emergency management team (EMT) dashboard with interactive map, OpenWeatherMap integration, role-based auth, and Excel database sync.",
+  "description": "Real-time emergency management team (EMT) dashboard with Firebase Firestore live cloud database sync, interactive offshore GIS map, and multi-screen operational coordination.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -1,15 +1,23 @@
 import React from 'react';
-import { Droplet, Maximize, Edit3 } from 'lucide-react';
+import { Droplet, Maximize, Edit3, RefreshCw } from 'lucide-react';
 import { IncidentDetails } from '../types';
+
+export interface CloudSyncStatus {
+  isConnected: boolean;
+  isSyncing: boolean;
+  lastUpdated?: string;
+}
 
 interface HeaderProps {
   incident?: IncidentDetails;
+  cloudSyncStatus?: CloudSyncStatus;
   onToggleGlobalFullscreen: () => void;
   onOpenEditPortal: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   incident,
+  cloudSyncStatus = { isConnected: true, isSyncing: false, lastUpdated: 'Live' },
   onToggleGlobalFullscreen,
   onOpenEditPortal
 }) => {
@@ -52,6 +60,33 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Right Controls */}
         <div className="flex items-center gap-1.5 shrink-0">
+          {/* Cloud Database Sync Badge */}
+          <div
+            className="hidden sm:flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-100 border border-slate-200 text-[10px] font-semibold text-slate-700"
+            title={`Firebase Firestore Connected (Project: drsb-emt). Last synced: ${cloudSyncStatus.lastUpdated || 'Live'}`}
+          >
+            {cloudSyncStatus.isSyncing ? (
+              <>
+                <RefreshCw className="w-3 h-3 text-blue-600 animate-spin" />
+                <span className="text-blue-700 font-bold">Syncing DB...</span>
+              </>
+            ) : cloudSyncStatus.isConnected ? (
+              <>
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+                <span className="text-slate-600 font-medium">Cloud DB:</span>
+                <span className="font-bold text-emerald-700">drsb-emt</span>
+              </>
+            ) : (
+              <>
+                <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                <span className="text-amber-700 font-bold">Offline Cache</span>
+              </>
+            )}
+          </div>
+
           {/* Edit Portal Button on the left side of the expand full screen button */}
           <button
             onClick={onOpenEditPortal}

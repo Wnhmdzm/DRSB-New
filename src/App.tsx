@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Header } from './components/Header';
 import { Screen1IncidentDashboard } from './components/Screen1IncidentDashboard';
 import { Screen2OperationalCoordination } from './components/Screen2OperationalCoordination';
@@ -27,8 +27,16 @@ import {
   ChatMessage,
   User
 } from './types';
+import {
+  subscribeToDashboardState,
+  saveDashboardState,
+  resetDashboardStateInFirestore,
+  testFirestoreConnection,
+  EMTDashboardFirestoreState,
+  DEFAULT_EMT_STATE
+} from './firebase';
 
-// Storage helpers
+// Local storage fallback helpers
 const getSavedState = <T,>(key: string, fallback: T): T => {
   try {
     const saved = localStorage.getItem(`drsb_emt_${key}`);
@@ -48,7 +56,7 @@ const saveState = <T,>(key: string, data: T) => {
 };
 
 export default function App() {
-  // --- Global Application State with Local Persistence ---
+  // --- Global Application State with Local & Firebase Persistence ---
   const [incident, setIncident] = useState<IncidentDetails>(() =>
     getSavedState<IncidentDetails>('incident', initialIncident)
   );
@@ -75,14 +83,117 @@ export default function App() {
   );
   const [currentUser] = useState<User>(initialUsers[0]);
 
+  // --- Cloud Sync Status ---
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<{
+    isConnected: boolean;
+    isSyncing: boolean;
+    lastUpdated?: string;
+  }>({
+    isConnected: true,
+    isSyncing: false,
+    lastUpdated: 'Connecting...'
+  });
+
   // --- Modal & Layout State ---
   const [isEditPortalOpen, setIsEditPortalOpen] = useState<boolean>(false);
   const [expandedScreen, setExpandedScreen] = useState<number | null>(null);
 
-  // --- Real-Time Telemetry Loop ---
+  // Ref to hold the latest state for cloud sync operations without stale closures
+  const stateRef = useRef<EMTDashboardFirestoreState>({
+    incident,
+    timeline,
+    actions,
+    vessels,
+    helicopter,
+    weather,
+    participants,
+    chatMessages
+  });
+
+  useEffect(() => {
+    stateRef.current = {
+      incident,
+      timeline,
+      actions,
+      vessels,
+      helicopter,
+      weather,
+      participants,
+      chatMessages
+    };
+  }, [incident, timeline, actions, vessels, helicopter, weather, participants, chatMessages]);
+
+  // --- 1. Real-Time Firebase Firestore Subscription ---
+  useEffect(() => {
+    // Test initial connection
+    testFirestoreConnection().then((connected) => {
+      setCloudSyncStatus((prev) => ({
+        ...prev,
+        isConnected: connected
+      }));
+    });
+
+    // Subscribe to live Firestore state changes
+    const unsubscribe = subscribeToDashboardState(
+      (remoteState) => {
+        if (remoteState) {
+          if (remoteState.incident) {
+            setIncident(remoteState.incident);
+            saveState('incident', remoteState.incident);
+          }
+          if (remoteState.timeline) {
+            setTimeline(remoteState.timeline);
+            saveState('timeline', remoteState.timeline);
+          }
+          if (remoteState.actions) {
+            setActions(remoteState.actions);
+            saveState('actions', remoteState.actions);
+          }
+          if (remoteState.vessels && remoteState.vessels.length > 0) {
+            setVessels(remoteState.vessels);
+            saveState('vessels', remoteState.vessels);
+          }
+          if (remoteState.helicopter) {
+            setHelicopter(remoteState.helicopter);
+            saveState('helicopter', remoteState.helicopter);
+          }
+          if (remoteState.weather) {
+            setWeather(remoteState.weather);
+            saveState('weather', remoteState.weather);
+          }
+          if (remoteState.participants && remoteState.participants.length > 0) {
+            setParticipants(remoteState.participants);
+            saveState('participants', remoteState.participants);
+          }
+          if (remoteState.chatMessages) {
+            setChatMessages(remoteState.chatMessages);
+            saveState('chatMessages', remoteState.chatMessages);
+          }
+
+          setCloudSyncStatus({
+            isConnected: true,
+            isSyncing: false,
+            lastUpdated: remoteState.lastUpdated || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          });
+        }
+      },
+      (error) => {
+        console.warn('Firebase sync warning:', error);
+        setCloudSyncStatus((prev) => ({
+          ...prev,
+          isConnected: false,
+          isSyncing: false
+        }));
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  // --- 2. Real-Time Vessel Movement & Weather Telemetry Loop ---
   useEffect(() => {
     const interval = setInterval(() => {
-      // 1. Move Vessel FCB-01 along GPS route
+      // Move Vessel FCB-01 smoothly on map
       setVessels((prev) =>
         prev.map((v) => {
           if (v.id === 'FCB-01') {
@@ -110,7 +221,7 @@ export default function App() {
         })
       );
 
-      // 2. Fluctuate weather parameters
+      // Fluctuate weather parameters slightly
       setWeather((prev) => {
         const deltaWind = (Math.random() - 0.5) * 0.8;
         const newWind = Number(Math.max(10, Math.min(22, prev.windSpeedKt + deltaWind)).toFixed(1));
@@ -122,57 +233,134 @@ export default function App() {
           updatedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         };
       });
-    }, 3000);
+    }, 3500);
 
     return () => clearInterval(interval);
   }, []);
 
-  // --- Handlers ---
-  const handleUpdateActionStatus = (id: number, status: 'Completed' | 'In Progress' | 'Pending') => {
-    setActions((prev) => {
-      const updated = prev.map((a) => (a.id === id ? { ...a, status } : a));
-      saveState('actions', updated);
-      return updated;
-    });
-  };
+  // --- 3. Handlers for Actions, Chat & Edit Portal (with Real-Time Cloud Save) ---
 
-  const handleSendChatMessage = (text: string) => {
-    const newMsg: ChatMessage = {
-      id: Date.now().toString(),
-      sender: currentUser.name,
-      role: currentUser.role.split(' ')[0],
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      text
-    };
-    setChatMessages((prev) => {
-      const updated = [...prev, newMsg];
-      saveState('chatMessages', updated);
-      return updated;
-    });
-  };
+  const handleUpdateActionStatus = useCallback(
+    async (id: number, status: 'Completed' | 'In Progress' | 'Pending') => {
+      const updatedActions = stateRef.current.actions.map((a) =>
+        a.id === id ? { ...a, status } : a
+      );
+      setActions(updatedActions);
+      saveState('actions', updatedActions);
 
-  const handleSavePortalData = (updated: EditPortalData) => {
-    setIncident(updated.incident);
-    setTimeline(updated.timeline);
-    setActions(updated.actions);
-    setVessels(updated.vessels);
-    setHelicopter(updated.helicopter);
-    setWeather(updated.weather);
-    setParticipants(updated.participants);
-    setChatMessages(updated.chatMessages);
+      // Push update to Firebase Firestore
+      setCloudSyncStatus((prev) => ({ ...prev, isSyncing: true }));
+      try {
+        await saveDashboardState(
+          {
+            ...stateRef.current,
+            actions: updatedActions
+          },
+          `${currentUser.name} (Action status change)`
+        );
+        setCloudSyncStatus((prev) => ({
+          ...prev,
+          isSyncing: false,
+          isConnected: true,
+          lastUpdated: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        }));
+      } catch (e) {
+        console.error('Error saving action status to Firestore:', e);
+        setCloudSyncStatus((prev) => ({ ...prev, isSyncing: false }));
+      }
+    },
+    [currentUser.name]
+  );
 
-    // Save to storage
-    saveState('incident', updated.incident);
-    saveState('timeline', updated.timeline);
-    saveState('actions', updated.actions);
-    saveState('vessels', updated.vessels);
-    saveState('helicopter', updated.helicopter);
-    saveState('weather', updated.weather);
-    saveState('participants', updated.participants);
-    saveState('chatMessages', updated.chatMessages);
-  };
+  const handleSendChatMessage = useCallback(
+    async (text: string) => {
+      const newMsg: ChatMessage = {
+        id: Date.now().toString(),
+        sender: currentUser.name,
+        role: currentUser.role.split(' ')[0],
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        text
+      };
+      const updatedMessages = [...stateRef.current.chatMessages, newMsg];
+      setChatMessages(updatedMessages);
+      saveState('chatMessages', updatedMessages);
 
-  const handleResetToDefaults = () => {
+      // Push update to Firebase Firestore
+      setCloudSyncStatus((prev) => ({ ...prev, isSyncing: true }));
+      try {
+        await saveDashboardState(
+          {
+            ...stateRef.current,
+            chatMessages: updatedMessages
+          },
+          `${currentUser.name} (Chat message)`
+        );
+        setCloudSyncStatus((prev) => ({
+          ...prev,
+          isSyncing: false,
+          isConnected: true,
+          lastUpdated: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        }));
+      } catch (e) {
+        console.error('Error saving chat message to Firestore:', e);
+        setCloudSyncStatus((prev) => ({ ...prev, isSyncing: false }));
+      }
+    },
+    [currentUser.name, currentUser.role]
+  );
+
+  const handleSavePortalData = useCallback(
+    async (updated: EditPortalData) => {
+      // 1. Immediately apply to local React state for instantaneous UI response
+      setIncident(updated.incident);
+      setTimeline(updated.timeline);
+      setActions(updated.actions);
+      setVessels(updated.vessels);
+      setHelicopter(updated.helicopter);
+      setWeather(updated.weather);
+      setParticipants(updated.participants);
+      setChatMessages(updated.chatMessages);
+
+      // 2. Persist to localStorage cache
+      saveState('incident', updated.incident);
+      saveState('timeline', updated.timeline);
+      saveState('actions', updated.actions);
+      saveState('vessels', updated.vessels);
+      saveState('helicopter', updated.helicopter);
+      saveState('weather', updated.weather);
+      saveState('participants', updated.participants);
+      saveState('chatMessages', updated.chatMessages);
+
+      // 3. Persist to Firebase Firestore database to broadcast to all connected dashboards
+      setCloudSyncStatus((prev) => ({ ...prev, isSyncing: true }));
+      try {
+        await saveDashboardState(
+          {
+            incident: updated.incident,
+            timeline: updated.timeline,
+            actions: updated.actions,
+            vessels: updated.vessels,
+            helicopter: updated.helicopter,
+            weather: updated.weather,
+            participants: updated.participants,
+            chatMessages: updated.chatMessages
+          },
+          currentUser.name
+        );
+        setCloudSyncStatus({
+          isConnected: true,
+          isSyncing: false,
+          lastUpdated: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        });
+      } catch (err) {
+        console.error('Failed to save to Firebase Firestore:', err);
+        setCloudSyncStatus((prev) => ({ ...prev, isSyncing: false }));
+      }
+    },
+    [currentUser.name]
+  );
+
+  const handleResetToDefaults = useCallback(async () => {
     setIncident(initialIncident);
     setTimeline(initialTimeline);
     setActions(initialActionItems);
@@ -190,7 +378,21 @@ export default function App() {
     localStorage.removeItem('drsb_emt_weather');
     localStorage.removeItem('drsb_emt_participants');
     localStorage.removeItem('drsb_emt_chatMessages');
-  };
+
+    // Reset in Firestore
+    setCloudSyncStatus((prev) => ({ ...prev, isSyncing: true }));
+    try {
+      await resetDashboardStateInFirestore();
+      setCloudSyncStatus({
+        isConnected: true,
+        isSyncing: false,
+        lastUpdated: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      });
+    } catch (e) {
+      console.error('Error resetting Firestore state:', e);
+      setCloudSyncStatus((prev) => ({ ...prev, isSyncing: false }));
+    }
+  }, []);
 
   const handleToggleGlobalFullscreen = () => {
     if (!document.fullscreenElement) {
@@ -204,9 +406,10 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#f5f5f7] text-slate-900 flex flex-col font-sans selection:bg-blue-500 selection:text-white">
-      {/* Top Header Navigation */}
+      {/* Top Header Navigation with Cloud Sync Status */}
       <Header
         incident={incident}
+        cloudSyncStatus={cloudSyncStatus}
         onToggleGlobalFullscreen={handleToggleGlobalFullscreen}
         onOpenEditPortal={() => setIsEditPortalOpen(true)}
       />
@@ -275,4 +478,3 @@ export default function App() {
     </div>
   );
 }
-
