@@ -1,0 +1,6 @@
+{
+  "name": "DRSB Emergency Management Team Dashboard",
+  "description": "Real-time analytics & emergency management team (EMT) dashboard with interactive map, OpenWeatherMap integration, role-based auth, and Excel database sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
