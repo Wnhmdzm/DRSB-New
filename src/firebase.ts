@@ -6,9 +6,9 @@ import {
   getDoc,
   onSnapshot,
   getDocFromServer,
-  serverTimestamp,
   Unsubscribe
 } from 'firebase/firestore';
+import { getAuth, signInAnonymously } from 'firebase/auth';
 import {
   IncidentDetails,
   TimelineEvent,
@@ -44,6 +44,16 @@ export const firebaseConfig = {
 // Initialize Firebase app singleton
 export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const db = getFirestore(app);
+export const auth = getAuth(app);
+
+// Attempt silent anonymous authentication so security rules requiring auth pass seamlessly
+try {
+  signInAnonymously(auth).catch((err) => {
+    console.info('Firebase anonymous auth notice:', err.message);
+  });
+} catch (e) {
+  console.info('Auth initialization note:', e);
+}
 
 export enum OperationType {
   CREATE = 'create',
@@ -56,14 +66,18 @@ export enum OperationType {
 
 export interface FirestoreErrorInfo {
   error: string;
+  code?: string;
   operationType: OperationType;
   path: string | null;
   timestamp: string;
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): FirestoreErrorInfo {
+  const errCode = (error as { code?: string })?.code;
+  const errMsg = error instanceof Error ? error.message : String(error);
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errMsg,
+    code: errCode,
     operationType,
     path,
     timestamp: new Date().toISOString()
@@ -101,18 +115,93 @@ export const DEFAULT_EMT_STATE: EMTDashboardFirestoreState = {
 const DASHBOARD_DOC_PATH = 'emt_dashboard/live_state';
 
 /**
- * Test connectivity to Firestore server
+ * Deep-clean all properties to remove `undefined` values which Firestore strictly rejects
  */
-export async function testFirestoreConnection(): Promise<boolean> {
+export function sanitizeFirestoreData<T>(obj: T): T {
+  if (obj === null || obj === undefined) {
+    return null as unknown as T;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map((item) => sanitizeFirestoreData(item)) as unknown as T;
+  }
+  if (typeof obj === 'object') {
+    const cleanObj: Record<string, any> = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (value !== undefined) {
+        cleanObj[key] = sanitizeFirestoreData(value);
+      }
+    }
+    return cleanObj as T;
+  }
+  return obj;
+}
+
+export interface FirestoreConnectionResult {
+  ok: boolean;
+  message: string;
+  code?: string;
+  isPermissionError?: boolean;
+}
+
+/**
+ * Test connectivity and permission to Firestore server
+ */
+export async function testFirestoreConnection(): Promise<FirestoreConnectionResult> {
   try {
     const docRef = doc(db, 'emt_dashboard', 'live_state');
-    await getDocFromServer(docRef);
-    return true;
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn("Firestore client is offline or network unreachable.");
+    const snap = await getDoc(docRef);
+    if (!snap.exists()) {
+      // Seed default doc
+      await setDoc(docRef, sanitizeFirestoreData(DEFAULT_EMT_STATE));
     }
-    return false;
+    return {
+      ok: true,
+      message: 'Successfully connected and verified with Firebase Firestore (drsb-emt).'
+    };
+  } catch (error: unknown) {
+    const errCode = (error as { code?: string })?.code;
+    const errMsg = error instanceof Error ? error.message : String(error);
+    const isPermission = errCode === 'permission-denied' || errMsg.toLowerCase().includes('permission') || errMsg.toLowerCase().includes('insufficient');
+
+    if (isPermission) {
+      return {
+        ok: false,
+        code: 'permission-denied',
+        isPermissionError: true,
+        message: 'Firestore Security Rules are blocking access. Please check rules in Firebase Console.'
+      };
+    }
+
+    if (errMsg.includes('the client is offline') || errCode === 'unavailable') {
+      return {
+        ok: false,
+        code: 'unavailable',
+        message: 'Firestore server is unreachable or offline.'
+      };
+    }
+
+    return {
+      ok: false,
+      code: errCode || 'unknown',
+      message: errMsg
+    };
+  }
+}
+
+/**
+ * Fetch the latest live state directly from Firestore
+ */
+export async function fetchLiveDashboardState(): Promise<EMTDashboardFirestoreState | null> {
+  try {
+    const docRef = doc(db, 'emt_dashboard', 'live_state');
+    const snapshot = await getDoc(docRef);
+    if (snapshot.exists()) {
+      return snapshot.data() as EMTDashboardFirestoreState;
+    }
+    return null;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, DASHBOARD_DOC_PATH);
+    return null;
   }
 }
 
@@ -132,7 +221,7 @@ export function subscribeToDashboardState(
         const data = snapshot.data() as EMTDashboardFirestoreState;
         onData(data);
       } else {
-        // First-time initialization: seed default dataset
+        // Document does not exist yet on Firestore; attempt initial seed
         saveDashboardState(DEFAULT_EMT_STATE, 'Auto Initial Seed').catch((err) => {
           console.error('Error seeding initial state to Firestore:', err);
         });
@@ -147,7 +236,7 @@ export function subscribeToDashboardState(
 }
 
 /**
- * Save / Update full or partial EMT Dashboard state to Firebase Firestore
+ * Save / Update full EMT Dashboard state to Firebase Firestore
  */
 export async function saveDashboardState(
   state: EMTDashboardFirestoreState,
@@ -168,10 +257,11 @@ export async function saveDashboardState(
   };
 
   try {
-    await setDoc(docRef, payload, { merge: true });
+    const sanitized = sanitizeFirestoreData(payload);
+    await setDoc(docRef, sanitized, { merge: true });
   } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, DASHBOARD_DOC_PATH);
-    throw error;
+    const errInfo = handleFirestoreError(error, OperationType.WRITE, DASHBOARD_DOC_PATH);
+    throw errInfo;
   }
 }
 
@@ -181,13 +271,14 @@ export async function saveDashboardState(
 export async function resetDashboardStateInFirestore(): Promise<void> {
   const docRef = doc(db, 'emt_dashboard', 'live_state');
   try {
-    await setDoc(docRef, {
+    const sanitized = sanitizeFirestoreData({
       ...DEFAULT_EMT_STATE,
       lastUpdated: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       updatedBy: 'Reset to Drill Baseline'
     });
+    await setDoc(docRef, sanitized);
   } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, DASHBOARD_DOC_PATH);
-    throw error;
+    const errInfo = handleFirestoreError(error, OperationType.WRITE, DASHBOARD_DOC_PATH);
+    throw errInfo;
   }
 }

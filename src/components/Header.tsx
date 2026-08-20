@@ -1,11 +1,13 @@
 import React from 'react';
-import { Droplet, Maximize, Edit3, RefreshCw } from 'lucide-react';
+import { Droplet, Maximize, Edit3, RefreshCw, ShieldAlert, CheckCircle2 } from 'lucide-react';
 import { IncidentDetails } from '../types';
 
 export interface CloudSyncStatus {
   isConnected: boolean;
   isSyncing: boolean;
+  isPermissionError?: boolean;
   lastUpdated?: string;
+  errorMessage?: string;
 }
 
 interface HeaderProps {
@@ -13,13 +15,17 @@ interface HeaderProps {
   cloudSyncStatus?: CloudSyncStatus;
   onToggleGlobalFullscreen: () => void;
   onOpenEditPortal: () => void;
+  onOpenDiagnostics?: () => void;
+  onRefreshSync?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   incident,
-  cloudSyncStatus = { isConnected: true, isSyncing: false, lastUpdated: 'Live' },
+  cloudSyncStatus = { isConnected: true, isSyncing: false, isPermissionError: false, lastUpdated: 'Live' },
   onToggleGlobalFullscreen,
-  onOpenEditPortal
+  onOpenEditPortal,
+  onOpenDiagnostics,
+  onRefreshSync
 }) => {
   const displayTitle = incident?.title || 'EMERGENCY MANAGEMENT TEAM (EMT) DASHBOARD';
   const displayCluster = incident?.clusterName || 'Baram Junior Cluster (Salbiah & Fatimah Fields)';
@@ -60,30 +66,58 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Right Controls */}
         <div className="flex items-center gap-1.5 shrink-0">
-          {/* Cloud Database Sync Badge */}
-          <div
-            className="hidden sm:flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-100 border border-slate-200 text-[10px] font-semibold text-slate-700"
-            title={`Firebase Firestore Connected (Project: drsb-emt). Last synced: ${cloudSyncStatus.lastUpdated || 'Live'}`}
-          >
-            {cloudSyncStatus.isSyncing ? (
-              <>
-                <RefreshCw className="w-3 h-3 text-blue-600 animate-spin" />
-                <span className="text-blue-700 font-bold">Syncing DB...</span>
-              </>
-            ) : cloudSyncStatus.isConnected ? (
-              <>
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                </span>
-                <span className="text-slate-600 font-medium">Cloud DB:</span>
-                <span className="font-bold text-emerald-700">drsb-emt</span>
-              </>
-            ) : (
-              <>
-                <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-                <span className="text-amber-700 font-bold">Offline Cache</span>
-              </>
+          {/* Cloud Database Sync Badge (Clickable for Diagnostics) */}
+          <div className="hidden sm:flex items-center gap-1">
+            <button
+              onClick={onOpenDiagnostics}
+              type="button"
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[10px] font-semibold transition-all cursor-pointer shadow-xs active:scale-95 ${
+                cloudSyncStatus.isPermissionError
+                  ? 'bg-rose-50 border-rose-300 text-rose-800 hover:bg-rose-100'
+                  : cloudSyncStatus.isSyncing
+                  ? 'bg-blue-50 border-blue-200 text-blue-700'
+                  : cloudSyncStatus.isConnected
+                  ? 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700'
+                  : 'bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100'
+              }`}
+              title="Click to open Firebase Firestore Cloud Sync Diagnostics"
+            >
+              {cloudSyncStatus.isSyncing ? (
+                <>
+                  <RefreshCw className="w-3 h-3 text-blue-600 animate-spin" />
+                  <span className="text-blue-700 font-bold">Syncing DB...</span>
+                </>
+              ) : cloudSyncStatus.isPermissionError ? (
+                <>
+                  <ShieldAlert className="w-3.5 h-3.5 text-rose-600 animate-pulse" />
+                  <span className="font-bold text-rose-700">Firestore Rules Blocked</span>
+                </>
+              ) : cloudSyncStatus.isConnected ? (
+                <>
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                  <span className="text-slate-600 font-medium">Cloud DB:</span>
+                  <span className="font-bold text-emerald-700">drsb-emt</span>
+                </>
+              ) : (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                  <span className="text-amber-700 font-bold">Offline Cache</span>
+                </>
+              )}
+            </button>
+
+            {onRefreshSync && (
+              <button
+                onClick={onRefreshSync}
+                type="button"
+                className="p-1 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 hover:text-blue-600 transition-all shadow-xs cursor-pointer"
+                title="Pull latest live state from Firestore Cloud DB"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${cloudSyncStatus.isSyncing ? 'animate-spin text-blue-600' : ''}`} />
+              </button>
             )}
           </div>
 
@@ -112,5 +146,3 @@ export const Header: React.FC<HeaderProps> = ({
     </header>
   );
 };
-
-

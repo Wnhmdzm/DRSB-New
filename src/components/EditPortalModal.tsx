@@ -49,7 +49,7 @@ interface EditPortalModalProps {
   isOpen: boolean;
   onClose: () => void;
   data: EditPortalData;
-  onSave: (updatedData: EditPortalData) => void;
+  onSave: (updatedData: EditPortalData) => Promise<void> | void;
   onResetToDefaults: () => void;
 }
 
@@ -84,6 +84,8 @@ export const EditPortalModal: React.FC<EditPortalModalProps> = ({
 
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [saveSuccessNotice, setSaveSuccessNotice] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Sync draft when opened or external data changes
   useEffect(() => {
@@ -98,15 +100,22 @@ export const EditPortalModal: React.FC<EditPortalModalProps> = ({
       setChatMessages([...data.chatMessages]);
       setHasUnsavedChanges(false);
       setSaveSuccessNotice(false);
+      setSaveError(null);
+      setIsSaving(false);
     }
   }, [isOpen, data]);
 
   if (!isOpen) return null;
 
-  const markChanged = () => setHasUnsavedChanges(true);
+  const markChanged = () => {
+    setHasUnsavedChanges(true);
+    setSaveError(null);
+  };
 
   // Handle Save
-  const handleSaveAndApply = () => {
+  const handleSaveAndApply = async () => {
+    setIsSaving(true);
+    setSaveError(null);
     const updated: EditPortalData = {
       incident,
       timeline,
@@ -117,12 +126,20 @@ export const EditPortalModal: React.FC<EditPortalModalProps> = ({
       participants,
       chatMessages
     };
-    onSave(updated);
-    setHasUnsavedChanges(false);
-    setSaveSuccessNotice(true);
-    setTimeout(() => {
-      onClose();
-    }, 450);
+
+    try {
+      await onSave(updated);
+      setHasUnsavedChanges(false);
+      setSaveSuccessNotice(true);
+      setTimeout(() => {
+        onClose();
+      }, 700);
+    } catch (err: any) {
+      console.error('Failed to save in EditPortalModal:', err);
+      setSaveError(err?.message || err?.error || 'Failed to save changes to Firestore.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // --- Handlers for Priorities, Objectives, SITREP bullets ---
@@ -1598,10 +1615,37 @@ export const EditPortalModal: React.FC<EditPortalModalProps> = ({
           </div>
         </div>
 
+        {/* Error Alert Banner inside modal if Firestore error occurs */}
+        {saveError && (
+          <div className="px-4 py-2 bg-rose-50 border-t border-rose-200 text-rose-900 text-xs flex items-center justify-between gap-2 shrink-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span className="font-bold shrink-0">Cloud Save Error:</span>
+              <span className="truncate">{saveError}</span>
+            </div>
+            <button
+              onClick={handleSaveAndApply}
+              disabled={isSaving}
+              className="px-2.5 py-1 rounded bg-rose-600 hover:bg-rose-700 text-white font-bold text-[11px] shrink-0 cursor-pointer shadow-xs"
+            >
+              Retry Save
+            </button>
+          </div>
+        )}
+
         {/* Bottom Footer Actions Bar */}
         <div className="px-4 py-3 bg-slate-100 border-t border-slate-200 flex items-center justify-between gap-3 shrink-0">
           <div className="text-xs text-slate-500 font-medium hidden sm:block">
-            {hasUnsavedChanges ? (
+            {isSaving ? (
+              <span className="text-blue-600 font-bold flex items-center gap-1.5 animate-pulse">
+                <span className="w-3.5 h-3.5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                Saving directly to Firebase Firestore & live dashboard...
+              </span>
+            ) : saveSuccessNotice ? (
+              <span className="text-emerald-700 font-bold flex items-center gap-1">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Saved & synchronized with all connected screens!
+              </span>
+            ) : hasUnsavedChanges ? (
               <span className="text-amber-700 font-bold flex items-center gap-1">
                 <AlertTriangle className="w-3.5 h-3.5" /> You have unsaved changes in the edit portal.
               </span>
@@ -1615,16 +1659,22 @@ export const EditPortalModal: React.FC<EditPortalModalProps> = ({
           <div className="flex items-center gap-2.5 ml-auto">
             <button
               onClick={onClose}
-              className="px-4 py-2 rounded-xl bg-white hover:bg-slate-200 text-slate-700 border border-slate-300 text-xs font-bold transition-all shadow-xs"
+              disabled={isSaving}
+              className="px-4 py-2 rounded-xl bg-white hover:bg-slate-200 text-slate-700 border border-slate-300 text-xs font-bold transition-all shadow-xs disabled:opacity-50"
             >
               Cancel & Exit
             </button>
             <button
               onClick={handleSaveAndApply}
-              className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-md shadow-blue-600/20 transition-all active:scale-[0.98]"
+              disabled={isSaving}
+              className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-md shadow-blue-600/20 transition-all active:scale-[0.98] disabled:opacity-60 cursor-pointer"
             >
-              <Save className="w-4 h-4" />
-              <span>Save & Update Dashboard</span>
+              {isSaving ? (
+                <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <Save className="w-4 h-4" />
+              )}
+              <span>{isSaving ? 'Saving to Cloud...' : 'Save & Update Dashboard'}</span>
             </button>
           </div>
         </div>

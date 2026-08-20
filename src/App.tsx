@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Header } from './components/Header';
+import { Header, CloudSyncStatus } from './components/Header';
 import { Screen1IncidentDashboard } from './components/Screen1IncidentDashboard';
 import { Screen2OperationalCoordination } from './components/Screen2OperationalCoordination';
 import { Screen3TeamsMeeting } from './components/Screen3TeamsMeeting';
 import { EditPortalModal, EditPortalData } from './components/EditPortalModal';
+import { FirebaseDiagnosticsModal } from './components/FirebaseDiagnosticsModal';
+import { ShieldAlert, ExternalLink, RefreshCw, X } from 'lucide-react';
 import {
   initialIncident,
   initialTimeline,
@@ -32,8 +34,10 @@ import {
   saveDashboardState,
   resetDashboardStateInFirestore,
   testFirestoreConnection,
+  fetchLiveDashboardState,
   EMTDashboardFirestoreState,
-  DEFAULT_EMT_STATE
+  DEFAULT_EMT_STATE,
+  FirestoreErrorInfo
 } from './firebase';
 
 // Local storage fallback helpers
@@ -83,16 +87,16 @@ export default function App() {
   );
   const [currentUser] = useState<User>(initialUsers[0]);
 
-  // --- Cloud Sync Status ---
-  const [cloudSyncStatus, setCloudSyncStatus] = useState<{
-    isConnected: boolean;
-    isSyncing: boolean;
-    lastUpdated?: string;
-  }>({
+  // --- Cloud Sync Status & Diagnostics State ---
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<CloudSyncStatus>({
     isConnected: true,
     isSyncing: false,
+    isPermissionError: false,
     lastUpdated: 'Connecting...'
   });
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState<boolean>(false);
+  const [dismissWarningBanner, setDismissWarningBanner] = useState<boolean>(false);
+  const [lastSyncError, setLastSyncError] = useState<string | null>(null);
 
   // --- Modal & Layout State ---
   const [isEditPortalOpen, setIsEditPortalOpen] = useState<boolean>(false);
@@ -123,15 +127,24 @@ export default function App() {
     };
   }, [incident, timeline, actions, vessels, helicopter, weather, participants, chatMessages]);
 
+  // Function to re-test connection
+  const checkCloudConnectivity = useCallback(async () => {
+    const res = await testFirestoreConnection();
+    setCloudSyncStatus((prev) => ({
+      ...prev,
+      isConnected: res.ok,
+      isPermissionError: res.isPermissionError || false,
+      errorMessage: res.message
+    }));
+    if (!res.ok) {
+      setLastSyncError(res.message);
+    }
+  }, []);
+
   // --- 1. Real-Time Firebase Firestore Subscription ---
   useEffect(() => {
     // Test initial connection
-    testFirestoreConnection().then((connected) => {
-      setCloudSyncStatus((prev) => ({
-        ...prev,
-        isConnected: connected
-      }));
-    });
+    checkCloudConnectivity();
 
     // Subscribe to live Firestore state changes
     const unsubscribe = subscribeToDashboardState(
@@ -173,22 +186,27 @@ export default function App() {
           setCloudSyncStatus({
             isConnected: true,
             isSyncing: false,
+            isPermissionError: false,
             lastUpdated: remoteState.lastUpdated || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
           });
+          setLastSyncError(null);
         }
       },
-      (error) => {
-        console.warn('Firebase sync warning:', error);
+      (error: FirestoreErrorInfo) => {
+        const isPerm = error.code === 'permission-denied' || error.error.toLowerCase().includes('permission');
         setCloudSyncStatus((prev) => ({
           ...prev,
           isConnected: false,
-          isSyncing: false
+          isSyncing: false,
+          isPermissionError: isPerm,
+          errorMessage: error.error
         }));
+        setLastSyncError(error.error);
       }
     );
 
     return () => unsubscribe();
-  }, []);
+  }, [checkCloudConnectivity]);
 
   // --- 2. Real-Time Vessel Movement & Weather Telemetry Loop ---
   useEffect(() => {
@@ -262,11 +280,14 @@ export default function App() {
           ...prev,
           isSyncing: false,
           isConnected: true,
+          isPermissionError: false,
           lastUpdated: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
         }));
-      } catch (e) {
+      } catch (e: any) {
         console.error('Error saving action status to Firestore:', e);
-        setCloudSyncStatus((prev) => ({ ...prev, isSyncing: false }));
+        const isPerm = e?.code === 'permission-denied' || String(e?.error || e).includes('permission');
+        setCloudSyncStatus((prev) => ({ ...prev, isSyncing: false, isPermissionError: isPerm }));
+        setLastSyncError(e?.error || String(e));
       }
     },
     [currentUser.name]
@@ -299,15 +320,72 @@ export default function App() {
           ...prev,
           isSyncing: false,
           isConnected: true,
+          isPermissionError: false,
           lastUpdated: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
         }));
-      } catch (e) {
+      } catch (e: any) {
         console.error('Error saving chat message to Firestore:', e);
-        setCloudSyncStatus((prev) => ({ ...prev, isSyncing: false }));
+        const isPerm = e?.code === 'permission-denied' || String(e?.error || e).includes('permission');
+        setCloudSyncStatus((prev) => ({ ...prev, isSyncing: false, isPermissionError: isPerm }));
+        setLastSyncError(e?.error || String(e));
       }
     },
     [currentUser.name, currentUser.role]
   );
+
+  const handleRefreshFromCloud = useCallback(async () => {
+    setCloudSyncStatus((prev) => ({ ...prev, isSyncing: true }));
+    try {
+      const data = await fetchLiveDashboardState();
+      if (data) {
+        if (data.incident) {
+          setIncident(data.incident);
+          saveState('incident', data.incident);
+        }
+        if (data.timeline) {
+          setTimeline(data.timeline);
+          saveState('timeline', data.timeline);
+        }
+        if (data.actions) {
+          setActions(data.actions);
+          saveState('actions', data.actions);
+        }
+        if (data.vessels && data.vessels.length > 0) {
+          setVessels(data.vessels);
+          saveState('vessels', data.vessels);
+        }
+        if (data.helicopter) {
+          setHelicopter(data.helicopter);
+          saveState('helicopter', data.helicopter);
+        }
+        if (data.weather) {
+          setWeather(data.weather);
+          saveState('weather', data.weather);
+        }
+        if (data.participants && data.participants.length > 0) {
+          setParticipants(data.participants);
+          saveState('participants', data.participants);
+        }
+        if (data.chatMessages) {
+          setChatMessages(data.chatMessages);
+          saveState('chatMessages', data.chatMessages);
+        }
+        setCloudSyncStatus({
+          isConnected: true,
+          isSyncing: false,
+          isPermissionError: false,
+          lastUpdated: data.lastUpdated || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        });
+        setLastSyncError(null);
+      } else {
+        await checkCloudConnectivity();
+      }
+    } catch (e: any) {
+      console.error('Error fetching live dashboard state:', e);
+      setCloudSyncStatus((prev) => ({ ...prev, isSyncing: false }));
+      setLastSyncError(e?.message || String(e));
+    }
+  }, [checkCloudConnectivity]);
 
   const handleSavePortalData = useCallback(
     async (updated: EditPortalData) => {
@@ -350,11 +428,21 @@ export default function App() {
         setCloudSyncStatus({
           isConnected: true,
           isSyncing: false,
+          isPermissionError: false,
           lastUpdated: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
         });
-      } catch (err) {
+        setLastSyncError(null);
+      } catch (err: any) {
         console.error('Failed to save to Firebase Firestore:', err);
-        setCloudSyncStatus((prev) => ({ ...prev, isSyncing: false }));
+        const isPerm = err?.code === 'permission-denied' || String(err?.error || err).includes('permission');
+        setCloudSyncStatus((prev) => ({
+          ...prev,
+          isSyncing: false,
+          isConnected: false,
+          isPermissionError: isPerm
+        }));
+        setLastSyncError(err?.error || String(err));
+        throw err;
       }
     },
     [currentUser.name]
@@ -386,11 +474,14 @@ export default function App() {
       setCloudSyncStatus({
         isConnected: true,
         isSyncing: false,
+        isPermissionError: false,
         lastUpdated: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
       });
-    } catch (e) {
+      setLastSyncError(null);
+    } catch (e: any) {
       console.error('Error resetting Firestore state:', e);
       setCloudSyncStatus((prev) => ({ ...prev, isSyncing: false }));
+      setLastSyncError(e?.error || String(e));
     }
   }, []);
 
@@ -412,7 +503,37 @@ export default function App() {
         cloudSyncStatus={cloudSyncStatus}
         onToggleGlobalFullscreen={handleToggleGlobalFullscreen}
         onOpenEditPortal={() => setIsEditPortalOpen(true)}
+        onOpenDiagnostics={() => setIsDiagnosticsOpen(true)}
+        onRefreshSync={handleRefreshFromCloud}
       />
+
+      {/* Top Sync Warning Banner (Visible if Firestore Rules block access) */}
+      {cloudSyncStatus.isPermissionError && !dismissWarningBanner && (
+        <div className="bg-gradient-to-r from-amber-600 via-rose-600 to-rose-700 text-white px-4 py-2 text-xs shadow-md flex items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2 duration-300">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <ShieldAlert className="w-4 h-4 shrink-0 text-amber-200" />
+            <span className="font-bold shrink-0">Multi-Device Cloud Sync Blocked:</span>
+            <span className="text-amber-100 truncate">
+              Firebase Security Rules are rejecting writes on project <code className="bg-black/20 px-1.5 py-0.5 rounded font-mono font-bold">drsb-emt</code>. Changes won't reflect on other laptops until rules are published.
+            </span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => setIsDiagnosticsOpen(true)}
+              className="px-2.5 py-1 rounded bg-white text-slate-900 font-bold hover:bg-slate-100 transition-colors shadow-xs cursor-pointer text-[11px]"
+            >
+              View 2-Minute Fix Guide
+            </button>
+            <button
+              onClick={() => setDismissWarningBanner(true)}
+              className="p-1 hover:bg-white/20 rounded transition-colors text-white/80 hover:text-white cursor-pointer"
+              title="Dismiss warning"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Main Dashboard Grid Area */}
       <main className="flex-1 p-2 md:p-3 max-w-[1720px] w-full mx-auto">
@@ -474,6 +595,14 @@ export default function App() {
         }}
         onSave={handleSavePortalData}
         onResetToDefaults={handleResetToDefaults}
+      />
+
+      {/* Firebase Cloud Sync Diagnostics Modal */}
+      <FirebaseDiagnosticsModal
+        isOpen={isDiagnosticsOpen}
+        onClose={() => setIsDiagnosticsOpen(false)}
+        lastError={lastSyncError}
+        onRefreshSync={handleRefreshFromCloud}
       />
     </div>
   );
